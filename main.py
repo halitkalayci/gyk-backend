@@ -1,21 +1,40 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime, timedelta
 import jwt
 import bcrypt
 import uuid
+import cv2
+import numpy as np
+from ultralytics import YOLO
+import os
+import tempfile
+from PIL import Image
+import io
 
 # JWT ayarları
 SECRET_KEY = "gyk-super-secret-key-2024-jwt-auth-system"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-app = FastAPI(title="GYK Backend API", description="JWT Auth ile CRUD API", version="1.0.0")
+# YOLO model yolu
+MODEL_PATH = "best.pt"
+
+app = FastAPI(title="GYK Backend API", description="JWT Auth ile CRUD API ve Plaka Tespiti", version="1.0.0")
 
 # Security
 security = HTTPBearer()
+
+# YOLO modelini yükle
+try:
+    model = YOLO(MODEL_PATH)
+    print(f"Model başarıyla yüklendi: {MODEL_PATH}")
+except Exception as e:
+    print(f"Model yüklenirken hata oluştu: {e}")
+    model = None
 
 # Pydantic modelleri
 class UserBase(BaseModel):
@@ -41,9 +60,83 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     email: Optional[str] = None
 
+class PlakaDetection(BaseModel):
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    confidence: float
+
+class PlakaResponse(BaseModel):
+    detections: List[PlakaDetection]
+    total_detections: int
+    message: str
+
 # Geçici kullanıcı veritabanı (gerçek projede veritabanı kullanılır)
 # RAM
 users_db = {}
+
+# Plaka tespiti fonksiyonu
+def detect_plates(image_array: np.ndarray, confidence_threshold: float = 0.75):
+    """
+    Görüntüde plaka tespiti yapar
+    
+    Args:
+        image_array: OpenCV formatında görüntü
+        confidence_threshold: Güven eşiği (varsayılan: 0.75)
+    
+    Returns:
+        Tuple: (işaretlenmiş görüntü, tespit listesi)
+    """
+    if model is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Model yüklenemedi"
+        )
+    
+    try:
+        # YOLO ile tahmin yap
+        result = model.predict(image_array, verbose=False)
+        
+        detections = []
+        marked_image = image_array.copy()
+        
+        if len(result) > 0 and result[0].boxes is not None:
+            boxes = result[0].boxes
+            
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                conf = box.conf[0].cpu().numpy()
+                
+                if conf > confidence_threshold:
+                    # Görüntüye dikdörtgen çiz
+                    cv2.rectangle(marked_image, 
+                                (int(x1), int(y1)), 
+                                (int(x2), int(y2)), 
+                                (0, 0, 255), 2)
+                    
+                    # Etiket ekle
+                    label = f"Plaka - {conf:.2f}"
+                    cv2.putText(marked_image, label, 
+                              (int(x1), int(y1) - 10), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    
+                    # Tespit bilgilerini kaydet
+                    detections.append(PlakaDetection(
+                        x1=float(x1),
+                        y1=float(y1),
+                        x2=float(x2),
+                        y2=float(y2),
+                        confidence=float(conf)
+                    ))
+        
+        return marked_image, detections
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Plaka tespiti sırasında hata oluştu: {str(e)}"
+        )
 
 # JWT fonksiyonları
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -164,6 +257,149 @@ async def protected_route(current_user: dict = Depends(get_current_user)):
 async def root():
     """API ana sayfası"""
     return {"message": "GYK Backend API'ye hoş geldiniz!"}
+
+# Plaka tespiti endpoint'leri
+@app.post("/detect-plates", response_model=PlakaResponse)
+async def detect_plates_endpoint(
+    file: UploadFile = File(...),
+    confidence: float = 0.75,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Yüklenen görüntüde plaka tespiti yapar
+    
+    Args:
+        file: Yüklenecek görüntü dosyası
+        confidence: Güven eşiği (0.0 - 1.0 arası)
+        current_user: Giriş yapmış kullanıcı
+    
+    Returns:
+        PlakaResponse: Tespit edilen plakaların bilgileri
+    """
+    # Dosya türü kontrolü
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sadece görüntü dosyaları kabul edilir"
+        )
+    
+    try:
+        # Dosyayı oku
+        contents = await file.read()
+        
+        # OpenCV formatına çevir
+        nparr = np.frombuffer(contents, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Görüntü okunamadı"
+            )
+        
+        # Plaka tespiti yap
+        marked_image, detections = detect_plates(image, confidence)
+        
+        return PlakaResponse(
+            detections=detections,
+            total_detections=len(detections),
+            message=f"{len(detections)} adet plaka tespit edildi"
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"İşlem sırasında hata oluştu: {str(e)}"
+        )
+
+@app.post("/detect-plates-image")
+async def detect_plates_with_image(
+    file: UploadFile = File(...),
+    confidence: float = 0.75,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Yüklenen görüntüde plaka tespiti yapar ve işaretlenmiş görüntüyü döner
+    
+    Args:
+        file: Yüklenecek görüntü dosyası
+        confidence: Güven eşiği (0.0 - 1.0 arası)
+        current_user: Giriş yapmış kullanıcı
+    
+    Returns:
+        FileResponse: İşaretlenmiş görüntü dosyası
+    """
+    # Dosya türü kontrolü
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sadece görüntü dosyaları kabul edilir"
+        )
+    
+    try:
+        # Dosyayı oku
+        contents = await file.read()
+        
+        # OpenCV formatına çevir
+        nparr = np.frombuffer(contents, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Görüntü okunamadı"
+            )
+        
+        # Plaka tespiti yap
+        marked_image, detections = detect_plates(image, confidence)
+        
+        # İşaretlenmiş görüntüyü JPEG formatına çevir
+        success, buffer = cv2.imencode('.jpg', marked_image)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Görüntü işlenemedi"
+            )
+        
+        # Geçici dosya oluştur
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            tmp_file.write(buffer.tobytes())
+            tmp_file_path = tmp_file.name
+        
+        return FileResponse(
+            path=tmp_file_path,
+            media_type='image/jpeg',
+            filename=f"detected_plates_{current_user['username']}.jpg"
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"İşlem sırasında hata oluştu: {str(e)}"
+        )
+
+@app.get("/model-status")
+async def get_model_status():
+    """Model durumunu kontrol eder"""
+    return {
+        "model_loaded": model is not None,
+        "model_path": MODEL_PATH,
+        "status": "Model yüklendi" if model is not None else "Model yüklenemedi"
+    }
+
+# Geçici dosyaları temizleme fonksiyonu
+def cleanup_temp_files():
+    """Geçici dosyaları temizler"""
+    temp_dir = tempfile.gettempdir()
+    for filename in os.listdir(temp_dir):
+        if filename.startswith('detected_plates_') and filename.endswith('.jpg'):
+            try:
+                os.remove(os.path.join(temp_dir, filename))
+            except:
+                pass
+
+# Uygulama başlatıldığında geçici dosyaları temizle
+cleanup_temp_files()
 
 if __name__ == "__main__":
     import uvicorn
