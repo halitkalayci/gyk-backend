@@ -404,3 +404,8 @@ cleanup_temp_files()
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# 1. -> Ekstra özellikler (Veritabanı)
+# 2. -> Flutter client örneği
+# 3. -> Flask client örneği
