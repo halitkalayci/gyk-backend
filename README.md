@@ -5,21 +5,49 @@ Bu proje, YOLO modeli kullanarak plaka tespiti yapan bir FastAPI backend uygulam
 ## Özellikler
 
 - JWT tabanlı kimlik doğrulama
+- PostgreSQL veritabanı entegrasyonu (SQLAlchemy ORM)
 - Plaka tespiti için YOLO modeli entegrasyonu
 - Görüntü yükleme ve işleme
 - Tespit edilen plakaların koordinatlarını döndürme
 - İşaretlenmiş görüntü döndürme
+- Kullanıcı yönetimi (CRUD işlemleri)
 
 ## Kurulum
 
-1. Gerekli kütüphaneleri yükleyin:
+### 1. PostgreSQL Veritabanı Kurulumu
+
+PostgreSQL sunucusunun çalıştığından ve `aiapp` veritabanının oluşturulduğundan emin olun:
+
+```sql
+-- PostgreSQL'de veritabanı oluştur
+CREATE DATABASE aiapp;
+```
+
+### 2. Python Bağımlılıkları
+
+Gerekli kütüphaneleri yükleyin:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. `best.pt` model dosyasının proje kök dizininde olduğundan emin olun.
+### 3. Veritabanı Tablolarını Oluştur
 
-3. Uygulamayı başlatın:
+```bash
+python create_tables.py
+```
+
+### 4. Veritabanı Bağlantısını Test Et
+
+```bash
+python test_db.py
+```
+
+### 5. Model Dosyası
+
+`best.pt` model dosyasının proje kök dizininde olduğundan emin olun.
+
+### 6. Uygulamayı Başlat
+
 ```bash
 python main.py
 ```
@@ -32,6 +60,13 @@ python main.py
 - `POST /login` - Kullanıcı girişi
 - `GET /me` - Mevcut kullanıcı bilgileri
 - `GET /protected` - Korumalı endpoint örneği
+
+### Kullanıcı Yönetimi
+
+- `GET /users` - Tüm kullanıcıları listele
+- `GET /users/{user_id}` - Belirli bir kullanıcıyı getir
+- `PUT /users/{user_id}` - Kullanıcı bilgilerini güncelle
+- `DELETE /users/{user_id}` - Kullanıcı hesabını sil
 
 ### Plaka Tespiti
 
@@ -108,8 +143,29 @@ curl -X POST "http://localhost:8000/detect-plates-image" \
 - `401`: Kimlik doğrulama hatası
 - `500`: Sunucu hatası veya model hatası
 
+## Veritabanı Yapılandırması
+
+### Bağlantı Bilgileri
+- **Host**: localhost
+- **Port**: 5433
+- **Database**: aiapp
+- **Username**: postgres
+- **Password**: postgres
+
+### Tablo Yapısı
+
+#### Users Tablosu
+- `id` (String, Primary Key): Kullanıcı ID'si
+- `email` (String, Unique): Email adresi
+- `username` (String): Kullanıcı adı
+- `hashed_password` (String): Hash'lenmiş şifre
+- `is_active` (Boolean): Hesap aktif mi?
+- `created_at` (DateTime): Oluşturulma tarihi
+- `updated_at` (DateTime): Güncellenme tarihi
+
 ## Notlar
 
 - Model dosyası (`best.pt`) proje kök dizininde olmalıdır
 - Geçici dosyalar otomatik olarak temizlenir
 - API dokümantasyonu için `http://localhost:8000/docs` adresini ziyaret edin
+- Veritabanı bağlantısı için PostgreSQL sunucusunun çalışır durumda olması gerekir

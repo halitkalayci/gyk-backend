@@ -14,6 +14,10 @@ import os
 import tempfile
 from PIL import Image
 import io
+from sqlalchemy.orm import Session
+from database import get_db
+from models import User
+from crud import get_user_by_email, create_user, get_user_by_id
 
 # JWT ayarları
 SECRET_KEY = "gyk-super-secret-key-2024-jwt-auth-system"
@@ -72,9 +76,8 @@ class PlakaResponse(BaseModel):
     total_detections: int
     message: str
 
-# Geçici kullanıcı veritabanı (gerçek projede veritabanı kullanılır)
-# RAM
-users_db = {}
+# Veritabanı bağlantısı artık SQLAlchemy ile sağlanıyor
+# Geçici kullanıcı veritabanı kaldırıldı
 
 # Plaka tespiti fonksiyonu
 def detect_plates(image_array: np.ndarray, confidence_threshold: float = 0.75):
@@ -168,15 +171,16 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         )
     return token_data
 
-def get_current_user(token_data: TokenData = Depends(verify_token)):
+def get_current_user(token_data: TokenData = Depends(verify_token), db: Session = Depends(get_db)):
     email = token_data.email
-    if email not in users_db:
+    user = get_user_by_email(db, email)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Kullanıcı bulunamadı",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return users_db[email]
+    return user
 
 # Şifre hash'leme fonksiyonu
 def hash_password(password: str) -> str:
@@ -187,9 +191,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 # Auth endpoint'leri
 @app.post("/register", response_model=User)
-async def register(user: UserCreate):
+async def register(user: UserCreate, db: Session = Depends(get_db)):
     """Yeni kullanıcı kaydı"""
-    if user.email in users_db:
+    # Email kontrolü
+    db_user = get_user_by_email(db, user.email)
+    if db_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Bu email adresi zaten kayıtlı"
@@ -199,31 +205,20 @@ async def register(user: UserCreate):
     hashed_password = hash_password(user.password)
     
     # Yeni kullanıcı oluştur
-    user_id = str(uuid.uuid4())
-    new_user = {
-        "id": user_id,
-        "email": user.email,
-        "username": user.username,
-        "hashed_password": hashed_password,
-        "is_active": True,
-        "created_at": datetime.utcnow()
-    }
-    
-    users_db[user.email] = new_user
-    return new_user
+    return create_user(db, user.email, user.username, hashed_password)
 
 @app.post("/login", response_model=Token)
-async def login(user_credentials: UserLogin):
+async def login(user_credentials: UserLogin, db: Session = Depends(get_db)):
     """Kullanıcı girişi"""
-    if user_credentials.email not in users_db:
+    user = get_user_by_email(db, user_credentials.email)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Geçersiz email veya şifre",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    user = users_db[user_credentials.email]
-    if not verify_password(user_credentials.password, user["hashed_password"]):
+    if not verify_password(user_credentials.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Geçersiz email veya şifre",
@@ -233,24 +228,24 @@ async def login(user_credentials: UserLogin):
     # Access token oluştur
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user["email"]}, expires_delta=access_token_expires
+        data={"sub": user.email}, expires_delta=access_token_expires
     )
     
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/me", response_model=User)
-async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
     """Mevcut kullanıcı bilgilerini getir"""
     return current_user
 
 # Korumalı endpoint örneği
 @app.get("/protected")
-async def protected_route(current_user: dict = Depends(get_current_user)):
+async def protected_route(current_user: User = Depends(get_current_user)):
     """Sadece giriş yapmış kullanıcıların erişebileceği endpoint"""
     return {
         "message": "Bu korumalı bir endpoint!",
-        "user": current_user["username"],
-        "email": current_user["email"]
+        "user": current_user.username,
+        "email": current_user.email
     }
 
 @app.get("/")
@@ -263,7 +258,7 @@ async def root():
 async def detect_plates_endpoint(
     file: UploadFile = File(...),
     confidence: float = 0.75,
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Yüklenen görüntüde plaka tespiti yapar
@@ -316,7 +311,7 @@ async def detect_plates_endpoint(
 async def detect_plates_with_image(
     file: UploadFile = File(...),
     confidence: float = 0.75,
-    current_user: dict = Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """
     Yüklenen görüntüde plaka tespiti yapar ve işaretlenmiş görüntüyü döner
@@ -369,7 +364,7 @@ async def detect_plates_with_image(
         return FileResponse(
             path=tmp_file_path,
             media_type='image/jpeg',
-            filename=f"detected_plates_{current_user['username']}.jpg"
+            filename=f"detected_plates_{current_user.username}.jpg"
         )
         
     except Exception as e:
@@ -386,6 +381,59 @@ async def get_model_status():
         "model_path": MODEL_PATH,
         "status": "Model yüklendi" if model is not None else "Model yüklenemedi"
     }
+
+# Kullanıcı yönetimi endpoint'leri
+@app.get("/users", response_model=List[User])
+async def get_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Tüm kullanıcıları listele (admin için)"""
+    from crud import get_all_users
+    users = get_all_users(db, skip=skip, limit=limit)
+    return users
+
+@app.get("/users/{user_id}", response_model=User)
+async def get_user(user_id: str, db: Session = Depends(get_db)):
+    """Belirli bir kullanıcıyı getir"""
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    return user
+
+@app.put("/users/{user_id}", response_model=User)
+async def update_user_info(
+    user_id: str, 
+    user_update: UserBase, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Kullanıcı bilgilerini güncelle"""
+    from crud import update_user
+    
+    # Sadece kendi bilgilerini güncelleyebilir
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Sadece kendi bilgilerinizi güncelleyebilirsiniz")
+    
+    updated_user = update_user(db, user_id, username=user_update.username)
+    if updated_user is None:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    return updated_user
+
+@app.delete("/users/{user_id}")
+async def delete_user_account(
+    user_id: str, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Kullanıcı hesabını sil"""
+    from crud import delete_user
+    
+    # Sadece kendi hesabını silebilir
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Sadece kendi hesabınızı silebilirsiniz")
+    
+    success = delete_user(db, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+    return {"message": "Kullanıcı başarıyla silindi"}
 
 # Geçici dosyaları temizleme fonksiyonu
 def cleanup_temp_files():
