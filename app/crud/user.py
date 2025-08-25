@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
-from models import User
-from pydantic import EmailStr
+from app.models.user import User
 import uuid
 
 def get_user_by_email(db: Session, email: str):

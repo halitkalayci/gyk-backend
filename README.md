@@ -52,55 +52,92 @@ python test_db.py
 python main.py
 ```
 
+## Proje Yapısı
+
+```
+gyk-backend/
+├── app/
+│   ├── api/                 # API endpoint'leri
+│   │   ├── auth.py         # Kimlik doğrulama
+│   │   ├── users.py        # Kullanıcı yönetimi
+│   │   └── plaka.py        # Plaka tespiti
+│   ├── core/               # Temel ayarlar
+│   │   ├── config.py       # Konfigürasyon
+│   │   └── security.py     # Güvenlik fonksiyonları
+│   ├── crud/               # Veritabanı işlemleri
+│   │   └── user.py         # User CRUD işlemleri
+│   ├── database/           # Veritabanı bağlantısı
+│   │   └── database.py     # SQLAlchemy ayarları
+│   ├── models/             # Veritabanı modelleri
+│   │   └── user.py         # User modeli
+│   ├── schemas/            # Pydantic şemaları
+│   │   ├── user.py         # User şemaları
+│   │   ├── token.py        # Token şemaları
+│   │   └── plaka.py        # Plaka şemaları
+│   ├── services/           # İş mantığı servisleri
+│   │   └── plaka_service.py # Plaka tespiti servisi
+│   └── utils/              # Yardımcı fonksiyonlar
+│       └── file_utils.py   # Dosya işlemleri
+├── main.py                 # Ana uygulama
+├── create_tables.py        # Tablo oluşturma scripti
+├── test_db.py             # Veritabanı test scripti
+└── requirements.txt        # Bağımlılıklar
+```
+
 ## API Endpoint'leri
 
-### Kimlik Doğrulama
+### Kimlik Doğrulama (`/auth`)
 
-- `POST /register` - Yeni kullanıcı kaydı
-- `POST /login` - Kullanıcı girişi
-- `GET /me` - Mevcut kullanıcı bilgileri
-- `GET /protected` - Korumalı endpoint örneği
+- `POST /auth/register` - Yeni kullanıcı kaydı
+- `POST /auth/login` - Kullanıcı girişi
 
-### Kullanıcı Yönetimi
+### Kullanıcı Yönetimi (`/users`)
 
-- `GET /users` - Tüm kullanıcıları listele
+- `GET /users/me` - Mevcut kullanıcı bilgileri
+- `GET /users/` - Tüm kullanıcıları listele
 - `GET /users/{user_id}` - Belirli bir kullanıcıyı getir
 - `PUT /users/{user_id}` - Kullanıcı bilgilerini güncelle
 - `DELETE /users/{user_id}` - Kullanıcı hesabını sil
 
-### Plaka Tespiti
+### Plaka Tespiti (`/plaka`)
 
-- `POST /detect-plates` - Plaka tespiti yapar ve JSON formatında sonuç döner
-- `POST /detect-plates-image` - Plaka tespiti yapar ve işaretlenmiş görüntü döner
-- `GET /model-status` - Model durumunu kontrol eder
+- `POST /plaka/detect` - Plaka tespiti yapar ve JSON formatında sonuç döner
+- `POST /plaka/detect-image` - Plaka tespiti yapar ve işaretlenmiş görüntü döner
+- `GET /plaka/model-status` - Model durumunu kontrol eder
 
 ## Kullanım Örnekleri
 
 ### 1. Kullanıcı Kaydı
 ```bash
-curl -X POST "http://localhost:8000/register" \
+curl -X POST "http://localhost:8000/auth/register" \
      -H "Content-Type: application/json" \
      -d '{"email": "test@example.com", "username": "testuser", "password": "password123"}'
 ```
 
 ### 2. Kullanıcı Girişi
 ```bash
-curl -X POST "http://localhost:8000/login" \
+curl -X POST "http://localhost:8000/auth/login" \
      -H "Content-Type: application/json" \
      -d '{"email": "test@example.com", "password": "password123"}'
 ```
 
-### 3. Plaka Tespiti (JSON Sonuç)
+### 3. Kullanıcı Bilgilerini Getir
 ```bash
-curl -X POST "http://localhost:8000/detect-plates" \
+curl -X GET "http://localhost:8000/users/me" \
+     -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### 4. Plaka Tespiti (JSON Sonuç)
+```bash
+curl -X POST "http://localhost:8000/plaka/detect" \
      -H "Authorization: Bearer YOUR_TOKEN" \
      -F "file=@test_image.jpg" \
      -F "confidence=0.75"
 ```
 
-### 4. Plaka Tespiti (İşaretlenmiş Görüntü)
+### 5. Plaka Tespiti (İşaretlenmiş Görüntü)
 ```bash
-curl -X POST "http://localhost:8000/detect-plates-image" \
+curl -X POST "http://localhost:8000/plaka/detect-image" \
      -H "Authorization: Bearer YOUR_TOKEN" \
      -F "file=@test_image.jpg" \
      -F "confidence=0.75" \
